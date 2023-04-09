@@ -15,11 +15,6 @@ service KVService {
     // Get
     rpc GetValue (GetValueReq) returns (GetValueResp) {}
     rpc GetItems (GetItemsReq) returns (GetItemsResp) {}
-
-    // 迭代器，前开后闭的
-    rpc CreateIter (CreateIterReq) returns (CreateIterResp) {}
-    rpc KeepIter (KeepIterReq) returns (KeepIterResp) {}
-    rpc NextItems (NextItemReq) returns (NextItemResp) {}
 }
 
 // 需要一种表达，先过滤member_info version再谈
@@ -187,7 +182,7 @@ message GetValueResp {
 
 message GetItemsReq {
     // 没必要校验member版本，本来就是成员变更才使用的
-    optional Key start_key = 1;
+    optional Key prev_last_key = 1;  // 也就是说返回将从这个key的下一个开始，不填就是从头开始
     uint64 expect_count = 2;  // 拉取的数量
     string addr = 3;
 }

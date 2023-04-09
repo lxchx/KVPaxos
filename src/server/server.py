@@ -268,89 +268,32 @@ class KVService(KVService_pb2_grpc.KVServiceServicer):
             else:
                 logger.info(f'return {KVService_pb2.GetValueResp(err=KVService_pb2.GetValueResp.Err.NotFound)}')
                 return KVService_pb2.GetValueResp(err=KVService_pb2.GetValueResp.Err.NotFound)
-
-    def CreateIter(self, request: KVService_pb2.CreateIterReq, context: grpc.ServicerContext) -> KVService_pb2.CreateIterResp:
-        with self._iter_lock_manager.get_lock(1):
-            logger.info(f'CreateIter request from {context.peer()}')
-            next_index = max(self._iters.keys()) + 1
-
-            commit_column = DBColumn.MetaCommit if request.start_key.type == KVService_pb2.Key.Type.Meta else DBColumn.UserCommit
-            # 先持久化
-            iter_value = KVService_pb2.IterValue(
-                column=commit_column.value, curren_key=request.start_key.content, expiration_timestamp=time.time() + request.lease*60)
-            self._storage.Set(DBColumn.Private, iter_storage_str(
-                next_index), iter_value.SerializeToString())
-
-            iter = (self._storage.NewItemIterator(
-                commit_column, request.start_key.content), time.time() + request.lease * 60, commit_column)
-            self._iters[next_index] = iter
-
-            return KVService_pb2.CreateIterResp(iter_id=next_index, addr=request.addr)
-
-    def KeepIter(self, request: KVService_pb2.KeepIterReq, context: grpc.ServicerContext) -> KVService_pb2.KeepIterResp:
-        with self._iter_lock_manager.get_lock(1):
-            logger.info(f'KeepIter request from {context.peer()}')
-            index = request.iter_id
-            iter_value_bytes = self._storage.Get(DBColumn.Private, iter_storage_str(index))
-            if iter_value_bytes == None:
-                return KVService_pb2.KeepIterResp(err=KVService_pb2.KeepIterResp.Err.NotFound, addr=request.addr)
-
-            iter_value = KVService_pb2.IterValue()
-            iter_value.ParseFromString(iter_value_bytes)
-            if time.time() > iter_value.expiration_timestamp:
-                self._storage.Delete(DBColumn.Private, str(index))
-                return KVService_pb2.KeepIterResp(err=KVService_pb2.KeepIterResp.Err.NotFound, addr=request.addr)
-
-            iter_value.expiration_timestamp = time.time() + request.lease * 60
-            iter_value_bytes = self._storage.Set(
-                DBColumn.Private, iter_storage_str(index), iter_value.SerializeToString())
-            return KVService_pb2.KeepIterResp(err=KVService_pb2.KeepIterResp.Err.OK, addr=request.addr)
-
-    def NextItems(self, request: KVService_pb2.NextItemReq, context: grpc.ServicerContext) -> KVService_pb2.NextItemResp:
-        with self._iter_lock_manager.get_lock(1):
-            logger.info(f'NextItems request from {context.peer()}')
-            index = request.iter_id
-            expect_count = request.expect_count
-
-            # 检查是否存在，是否过期
-            if index not in self._iters.keys():
-                return KVService_pb2.NextItemResp(err=KVService_pb2.KeepIterResp.Err.NotFound, addr=request.addr)
             
-            if time.time() > self._iters[index][1]:
-                return KVService_pb2.NextItemResp(err=KVService_pb2.KeepIterResp.Err.NotFound, addr=request.addr)
-            
-            iter_value_bytes = self._storage.Get(DBColumn.Private, iter_storage_str(index))
-            assert iter_value_bytes, "在NextItem时发现storage内迭代器不存在"
-            iter_value = KVService_pb2.IterValue()
-            iter_value.ParseFromString(iter_value_bytes)
+    def GetItems(self, request: KVService_pb2.GetItemsReq, context: grpc.ServicerContext) -> KVService_pb2.GetItemsResp:
+        logger.info(f'GetItems request from {context.peer()}')
+        commit_column = DBColumn.MetaCommit if request.prev_last_key.type == KVService_pb2.Key.Type.Meta else DBColumn.UserCommit
+        prev_last_key = request.prev_last_key.content if request.prev_last_key else ""
+        iter = (self._storage.NewItemIterator(
+                commit_column, prev_last_key), time.time() + request.lease * 60, commit_column)
+        count = 0
+        ret = KVService_pb2.GetItemsResp(err=KVService_pb2.GetItemsResp.Err.OK, addr = request.addr)
+        for key, value in iter:
+            if prev_last_key == key:
+                # 跳过prev_last_key
+                continue
 
-            ret = KVService_pb2.NextItemResp(err=KVService_pb2.KeepIterResp.Err.OK, addr=request.addr)
-            count = 0
-            iter = self._iters[index][0]
-            current_key = str()
-            for key, value in iter:
-                if iter_value.current_key == key:
-                    # 跳过start_key
-                    continue
-
-                key_type = KVService_pb2.Key.Type.User if self._iters[index][2] == DBColumn.UserCommit else KVService_pb2.Key.Type.Meta
-                commited_value = KVService_pb2.CommitedValue()
-                commited_value.ParseFromString(value)                
-                
-                ret.kvs.append(KVService_pb2.KV(key=KVService_pb2.Key(type=key_type, content=key), value=commited_value))
-                count+=1
-                current_key = key
-                if count == current_key:
-                    break
+            key_type = KVService_pb2.Key.Type.User if commit_column == DBColumn.UserCommit else KVService_pb2.Key.Type.Meta
+            commited_value = KVService_pb2.CommitedValue()
+            commited_value.ParseFromString(value)                
             
-            iter_value.current_key = current_key
-            self._storage.Set(DBColumn.Private, iter_storage_str(
-                request.iter_id), iter_value.SerializeToString())
-
-            if count == 0:
-                return KVService_pb2.NextItemResp(err=KVService_pb2.KeepIterResp.Err.IterHitEnd, addr=request.addr)
-            return ret
-            
+            ret.kvs.append(KVService_pb2.KV(key=KVService_pb2.Key(type=key_type, content=key), value=commited_value))
+            count+=1
+            if count == request.expect_count:
+                break
+        
+        if count == 0:
+            return KVService_pb2.NextItemResp(err=KVService_pb2.GetItemsResp.Err.NO_MORE_ITEMS, addr=request.addr)
+        return ret
 
 
 if __name__ == '__main__':

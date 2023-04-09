@@ -39,20 +39,10 @@ class KVServiceStub(object):
                 request_serializer=KVService__pb2.GetValueReq.SerializeToString,
                 response_deserializer=KVService__pb2.GetValueResp.FromString,
                 )
-        self.CreateIter = channel.unary_unary(
-                '/src.proto.KVService/CreateIter',
-                request_serializer=KVService__pb2.CreateIterReq.SerializeToString,
-                response_deserializer=KVService__pb2.CreateIterResp.FromString,
-                )
-        self.KeepIter = channel.unary_unary(
-                '/src.proto.KVService/KeepIter',
-                request_serializer=KVService__pb2.KeepIterReq.SerializeToString,
-                response_deserializer=KVService__pb2.KeepIterResp.FromString,
-                )
-        self.NextItems = channel.unary_unary(
-                '/src.proto.KVService/NextItems',
-                request_serializer=KVService__pb2.NextItemReq.SerializeToString,
-                response_deserializer=KVService__pb2.NextItemResp.FromString,
+        self.GetItems = channel.unary_unary(
+                '/src.proto.KVService/GetItems',
+                request_serializer=KVService__pb2.GetItemsReq.SerializeToString,
+                response_deserializer=KVService__pb2.GetItemsResp.FromString,
                 )
 
 
@@ -92,20 +82,7 @@ class KVServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def CreateIter(self, request, context):
-        """迭代器
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def KeepIter(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def NextItems(self, request, context):
+    def GetItems(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -139,20 +116,10 @@ def add_KVServiceServicer_to_server(servicer, server):
                     request_deserializer=KVService__pb2.GetValueReq.FromString,
                     response_serializer=KVService__pb2.GetValueResp.SerializeToString,
             ),
-            'CreateIter': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateIter,
-                    request_deserializer=KVService__pb2.CreateIterReq.FromString,
-                    response_serializer=KVService__pb2.CreateIterResp.SerializeToString,
-            ),
-            'KeepIter': grpc.unary_unary_rpc_method_handler(
-                    servicer.KeepIter,
-                    request_deserializer=KVService__pb2.KeepIterReq.FromString,
-                    response_serializer=KVService__pb2.KeepIterResp.SerializeToString,
-            ),
-            'NextItems': grpc.unary_unary_rpc_method_handler(
-                    servicer.NextItems,
-                    request_deserializer=KVService__pb2.NextItemReq.FromString,
-                    response_serializer=KVService__pb2.NextItemResp.SerializeToString,
+            'GetItems': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetItems,
+                    request_deserializer=KVService__pb2.GetItemsReq.FromString,
+                    response_serializer=KVService__pb2.GetItemsResp.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -250,7 +217,7 @@ class KVService(object):
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
     @staticmethod
-    def CreateIter(request,
+    def GetItems(request,
             target,
             options=(),
             channel_credentials=None,
@@ -260,42 +227,8 @@ class KVService(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/src.proto.KVService/CreateIter',
-            KVService__pb2.CreateIterReq.SerializeToString,
-            KVService__pb2.CreateIterResp.FromString,
-            options, channel_credentials,
-            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
-
-    @staticmethod
-    def KeepIter(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/src.proto.KVService/KeepIter',
-            KVService__pb2.KeepIterReq.SerializeToString,
-            KVService__pb2.KeepIterResp.FromString,
-            options, channel_credentials,
-            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
-
-    @staticmethod
-    def NextItems(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/src.proto.KVService/NextItems',
-            KVService__pb2.NextItemReq.SerializeToString,
-            KVService__pb2.NextItemResp.FromString,
+        return grpc.experimental.unary_unary(request, target, '/src.proto.KVService/GetItems',
+            KVService__pb2.GetItemsReq.SerializeToString,
+            KVService__pb2.GetItemsResp.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
