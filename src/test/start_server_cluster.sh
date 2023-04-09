@@ -16,7 +16,10 @@ function cleanup {
 # 注册退出函数
 trap cleanup SIGINT SIGTERM
 
-export PYTHONPATH=/Users/lxp/code/git_repos/KVPaxos/
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PRJ_ABS_PATH=$(realpath "${SCRIPT_DIR}/../../")
+
+export PYTHONPATH=${PRJ_ABS_PATH}
 
 python3 ./src/server/server.py --port 8001 --members 127.0.0.1:8001 127.0.0.1:8002 127.0.0.1:8003 --store_path test_store1.db &
 echo "Server on port 8001 is running in the background."

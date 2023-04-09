@@ -3,7 +3,10 @@
 rm -f client*.log
 echo "All client log files have been deleted."
 
-export PYTHONPATH=/Users/lxp/code/git_repos/KVPaxos/
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PRJ_ABS_PATH=$(realpath "${SCRIPT_DIR}/../../")
+
+export PYTHONPATH=${PRJ_ABS_PATH}
 python3 ./src/client/client.py --key my_key --value some_value --log_name useless
 echo "set to some_value done"
 
