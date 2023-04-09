@@ -1,0 +1,254 @@
+syntax = "proto3";
+
+package src.proto;
+
+service KVService {
+    // Set
+    // 查询指定Key在Service上已Commit的最高Version
+    rpc CommitedVersion (CommitedVersionReq) returns (CommitedVersionResp) {}
+
+    rpc PaxosPhase1 (PaxosPhase1Req) returns (PaxosPhase1Resp) {}
+    rpc PaxosPhase2 (PaxosPhase2Req) returns (PaxosPhase2Resp) {}
+
+    rpc CommitKey (CommitReq) returns (CommitResp) {}
+
+    // Get
+    rpc GetValue (GetValueReq) returns (GetValueResp) {}
+    rpc GetItems (GetItemsReq) returns (GetItemsResp) {}
+
+    // 迭代器，前开后闭的
+    rpc CreateIter (CreateIterReq) returns (CreateIterResp) {}
+    rpc KeepIter (KeepIterReq) returns (KeepIterResp) {}
+    rpc NextItems (NextItemReq) returns (NextItemResp) {}
+}
+
+// 需要一种表达，先过滤member_info version再谈
+message Member {
+    string addr = 1;
+    uint64 id = 2;
+}
+message MembersInfo {
+    repeated Member members = 1;
+    repeated Member addingMembers = 2;
+    repeated Member deletingMembers = 3;
+    uint64 version = 4;
+}
+
+message CommitedValue {
+    string value = 1;
+    uint64 commitedVersion = 2;
+}
+
+// 还没有commit下来的
+message LogValue {
+    string value = 1;
+    uint64 value_bal = 2;
+
+    uint64 last_visit_bal = 3;
+}
+
+message IterValue {
+    bytes column = 1;
+    string current_key = 2;
+    uint64 expiration_timestamp = 3;
+}
+
+message LockValue {
+    string owner = 1;
+    uint64 expiration_timestamp = 3;
+}
+
+// 需要先检查MembersInfo是不是最新的
+message FirstKVServiceReq {
+    uint64 membersInfoVersion = 1;
+}
+
+message FirstKVServiceResp {
+    MembersInfo membersInfo = 2;
+}
+
+message Key {
+    enum Type {
+        Meta = 0;
+        User = 1;
+    };
+    Type type = 1;
+    string content = 2;
+}
+
+// rpc CommitedVersion
+message CommitedVersionReq {
+    FirstKVServiceReq firstReq = 1;
+
+    Key key = 2;
+}
+
+message CommitedVersionResp {
+    optional FirstKVServiceResp firstKVServiceResp = 1;
+
+    enum Err {
+        OK = 0;
+        NotCommited = 1;
+    }
+    Err err = 2;
+
+    Key key = 3;
+    uint64 version = 4;
+}
+
+// rpc PaxosPhase1
+message PaxosPhase1Req {
+    FirstKVServiceReq firstReq = 1;
+
+    Key key = 2;
+    uint64 version = 3;
+
+    uint64 ballotNum = 4;
+}
+message PaxosPhase1Resp {
+    optional FirstKVServiceResp firstKVServiceResp = 1;
+
+    Key key = 2;
+    uint64 version = 3;
+    enum Err {
+        OK = 0;
+        KeyVersionHaveCommited = 1;
+    }
+    Err err = 4;
+
+    uint64 lastBal = 5;  // 如果是0，说明之前是空的
+    string value = 6;
+    uint64 vBal = 7;
+}
+
+// rpc PaxosPhase2
+message PaxosPhase2Req {
+    FirstKVServiceReq firstReq = 1;
+
+    Key key = 2;
+    uint64 version = 3;
+    string value = 4;
+
+    uint64 ballotNum = 5;
+}
+message PaxosPhase2Resp {
+    optional FirstKVServiceResp firstKVServiceResp = 1;
+
+    Key key = 2;
+    uint64 version = 3;
+    enum Err {
+        OK = 0;
+        KeyVersionHaveCommited = 1;
+        BallotNumTooLow = 2;
+    }
+    Err err = 4;
+}
+
+// rpc CommitKey
+message CommitReq {
+    FirstKVServiceReq firstReq = 1;
+
+    Key key = 2;
+    uint64 version = 3;
+    optional string value = 4;
+}
+message CommitResp {
+    optional FirstKVServiceResp firstKVServiceResp = 1;
+
+    Key key = 2;
+    uint64 version = 3;
+    enum Err {
+        OK = 0;
+        AlreadyCommitHigherVersion = 1;
+        NotFoundVersionValue = 2;
+    }
+    Err err = 4;
+}
+
+// rpc GetValue
+message GetValueReq {
+    FirstKVServiceReq firstReq = 1;
+
+    Key key = 2;
+}
+
+message GetValueResp {
+    optional FirstKVServiceResp firstKVServiceResp = 1;
+
+    Key key = 2;
+    string value = 3;
+    uint64 commitedVersion = 4;
+    enum Err {
+        OK = 0;
+        NotFound = 1;  // 有记录但是没有commit也是NotFound
+    }
+    Err err = 5;
+}
+
+message GetItemsReq {
+    // 没必要校验member版本，本来就是成员变更才使用的
+    optional Key start_key = 1;
+    uint64 expect_count = 2;  // 拉取的数量
+    string addr = 3;
+}
+
+message KV {
+    Key key = 1;
+    CommitedValue value = 2;
+}
+
+message GetItemsResp {
+    enum Err {
+        OK = 0;
+        NO_MORE_ITEMS = 1;
+    }
+    Err err = 1;
+    repeated KV kvs = 2;
+    string addr = 3;
+}
+
+message CreateIterReq {
+    // 没必要校验member版本，本来就是成员变更才使用的
+    optional Key start_key = 1;
+    uint64 lease = 2;  // 单位是分钟
+    string addr = 3;
+}
+
+message CreateIterResp {
+    uint64 iter_id = 1;
+    string addr = 2;
+}
+
+message KeepIterReq {
+    uint64 iter_id = 1;
+    uint64 lease = 2;  // 单位是分钟
+    string addr = 3;
+}
+
+message KeepIterResp {
+    enum Err {
+        OK = 0;
+        NotFound = 1;  // 可能是不存在，也可能是已经过期了
+    }
+    Err err = 1;
+    string addr = 2;
+}
+
+message NextItemReq {
+    uint64 iter_id = 1;
+    string cur_key = 2;
+    uint64 expect_count = 3;  // 拉取的数量
+    string addr = 4;
+}
+
+
+message NextItemResp {
+    enum Err {
+        OK = 0;
+        IterNotFound = 1;  // 可能是不存在，也可能是已经过期了
+        IterHitEnd = 2;  // 无法再迭代了
+    }
+    Err err = 1;
+    repeated KV kvs = 2;
+    string addr = 3;
+}
