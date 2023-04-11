@@ -5,6 +5,7 @@ import time
 from typing import List, Optional, Union
 import grpc
 import logging
+from google.protobuf.json_format import MessageToJson, Parse
 
 from src.utils.log_manager import LogManager
 
@@ -30,26 +31,8 @@ def iter_storage_str(iter_index: int):
 
 class KVService(KVService_pb2_grpc.KVServiceServicer):
     def __recovery(self):
-        # 从数据库里恢复iter
-        iters_iter = self._storage.NewItemIterator(DBColumn.Private)
-        self._iters = dict()  # int -> (DBColumn, rocksdb.BaseIterator)
-
-        expired_iters = []
-        for iter_index_str, iter_value_bytes in iters_iter:
-            iter_value = KVService_pb2.IterValue()
-            iter_value.ParseFromString(iter_value_bytes)
-            if time.time() < iter_value.expiration_timestamp:
-                # 只创建没过期的iter
-                iter = self._storage.NewItemIterator(
-                    DBColumn.from_bytes(iter_value.column), iter_value.current_key)
-                self._iters[int(iter_index_str)] = (
-                    iter, iter_value.expiration_timestamp, DBColumn.from_bytes(iter_value.column))
-            else:
-                expired_iters.append(iter_index_str)
-
-        # 顺带清理一下过期的iter
-        for expired_iter_key in expired_iters:
-            self._storage.Delete(DBColumn.Private, expired_iter_key)
+        # 暂时什么也不用做
+        pass
 
     _user_lock_manager = LockManager()
     _iter_lock_manager = LockManager()
@@ -62,15 +45,19 @@ class KVService(KVService_pb2_grpc.KVServiceServicer):
                 members_info.members.append(
                     KVService_pb2.Member(addr=addr, id=id))
             members_info.version = 1
+            commited_members_info = KVService_pb2.CommitedValue(value=MessageToJson(members_info), commitedVersion=1)
             self._storage.Set(DBColumn.MetaCommit, "MEMBER.member_info",
-                               members_info.SerializeToString())
+                               commited_members_info.SerializeToString())
         else:
             self.__recovery()
 
     def __check_member_version(self, member_version: int) -> Optional[KVService_pb2.MembersInfo]:
-        member_info = KVService_pb2.MembersInfo()
-        member_info.ParseFromString(self._storage.Get(
+        commited_members_info = KVService_pb2.CommitedValue()
+        commited_members_info.ParseFromString(self._storage.Get(
             DBColumn.MetaCommit, "MEMBER.member_info"))
+
+        member_info = KVService_pb2.MembersInfo()
+        Parse(commited_members_info.value, member_info)
         if member_info.version <= member_version:
             return None
         else:
@@ -273,10 +260,10 @@ class KVService(KVService_pb2_grpc.KVServiceServicer):
         logger.info(f'GetItems request from {context.peer()}')
         commit_column = DBColumn.MetaCommit if request.prev_last_key.type == KVService_pb2.Key.Type.Meta else DBColumn.UserCommit
         prev_last_key = request.prev_last_key.content if request.prev_last_key else ""
-        iter = (self._storage.NewItemIterator(
-                commit_column, prev_last_key), time.time() + request.lease * 60, commit_column)
+        iter = self._storage.NewItemIterator(
+                commit_column, prev_last_key)
         count = 0
-        ret = KVService_pb2.GetItemsResp(err=KVService_pb2.GetItemsResp.Err.OK, addr = request.addr)
+        ret = KVService_pb2.GetItemsResp(err=KVService_pb2.GetItemsResp.Err.OK)
         for key, value in iter:
             if prev_last_key == key:
                 # 跳过prev_last_key
@@ -292,7 +279,7 @@ class KVService(KVService_pb2_grpc.KVServiceServicer):
                 break
         
         if count == 0:
-            return KVService_pb2.NextItemResp(err=KVService_pb2.GetItemsResp.Err.NO_MORE_ITEMS, addr=request.addr)
+            return KVService_pb2.NextItemResp(err=KVService_pb2.GetItemsResp.Err.NO_MORE_ITEMS)
         return ret
 
 

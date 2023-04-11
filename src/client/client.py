@@ -8,6 +8,9 @@ import time
 from typing import List, Union
 import uuid
 import logging
+from collections import deque
+from queue import PriorityQueue
+from google.protobuf.json_format import MessageToJson, Parse
 
 import grpc
 from src.proto import KVService_pb2
@@ -34,19 +37,20 @@ class KVClient:
     # 主动式的锁，需要主动查询，利用KV存储本身实现，带租期（单位是分钟）返回值代表上锁有没有成功
     def _try_lock(self, lock_object: str, lease_period: int = 30) -> bool:
         lock_key = f'LOCK.{lock_object}'
-        _, lock_value_str = self._GetInternal(
+        _, lock_value_json_str = self._GetInternal(
             KVService_pb2.Key.Type.Meta, lock_key, 5)
-        if lock_value_str:
+        if lock_value_json_str:
             lock_value = KVService_pb2.LockValue()
-            lock_value.ParseFromString(lock_value_str)
-            if lock_value.ownner != KVClient.__client_feature_code() and time.time() < lock_value.expiration_timestamp:
+            Parse(lock_value_json_str, lock_value)
+            logger.info(f'got lock value: {lock_value_json_str}')
+            if lock_value.owner != KVClient.__client_feature_code() and time.time() < lock_value.expiration_timestamp:
                 # 如果有锁，且锁的主人不是自己且锁没有过期，上锁失败
                 return False
         # 否则继续往下
         lock_value = KVService_pb2.LockValue(owner=KVClient.__client_feature_code(
-        ), expiration_timestamp=time.time() + lease_period * 60)
+        ), expiration_timestamp=int(time.time()) + lease_period * 60)
         # 如果这里返回False说明锁被另一个Client抢到了
-        return self._SetInternal(KVService_pb2.Key.Type.Meta, lock_key, lock_value.SerializeToString(), 5)
+        return self._SetInternal(KVService_pb2.Key.Type.Meta, lock_key, MessageToJson(lock_value), 5)
 
     def Set(self, key: str, value: str, timeout: int = 60):
         random.seed(time.time())
@@ -141,14 +145,15 @@ class KVClient:
                     stubmethod_with_requests, resp_ok, 5)
 
                 if need_higher_value_version:
-                    logger.info(f'Paxos phase-1 need_higher_value_version，这个version已经commit了，失败')
+                    logger.info(
+                        f'Paxos phase-1 need_higher_value_version，这个version已经commit了，失败')
                     return False
 
                 if is_member_info_expired:
-                    logger.info(f'Paxos phase-1 is_member_info_expired，重新开始Set')
+                    logger.info(
+                        f'Paxos phase-1 is_member_info_expired，重新开始Set')
                     step = 0  # 整个phase-1重来
                     continue
-
 
                 if len(ok_resps) < quorum:
                     phase1_no_quorum_ok_count += 1
@@ -206,11 +211,13 @@ class KVClient:
                     stubmethod_with_requests, resp_ok, 5)
 
                 if need_higher_value_version:
-                    logger.info(f'Paxos phase-2 need_higher_value_version，这个version已经commit了，失败')
+                    logger.info(
+                        f'Paxos phase-2 need_higher_value_version，这个version已经commit了，失败')
                     return False
 
                 if is_member_info_expired:
-                    logger.info(f'Paxos phase-2 is_member_info_expired，重新开始Set')
+                    logger.info(
+                        f'Paxos phase-2 is_member_info_expired，重新开始Set')
                     step = 0
                     continue
 
@@ -218,7 +225,8 @@ class KVClient:
                     # 被抢占了
                     # TODO 实现指数退避
                     # 随机等待1~200毫秒，尽量避免活锁
-                    logger.info(f'phase-2 没成功让至少quorum个Acceptor接受，说明被抢占了，睡一会然后重试')
+                    logger.info(
+                        f'phase-2 没成功让至少quorum个Acceptor接受，说明被抢占了，睡一会然后重试')
                     time.sleep(random.randint(1, 200) / 1000.0)
                     step = 2  # 从phase-1重新开始，会自动换更高的bal_num
                     continue
@@ -269,14 +277,14 @@ class KVClient:
                     stubmethod_with_requests, resp_ok, 5)
 
                 if need_higher_value_version:
-                    logger.info(f'Commit need_higher_value_version，这个version已经commit了，失败')
+                    logger.info(
+                        f'Commit need_higher_value_version，这个version已经commit了，失败')
                     return False
 
                 if is_member_info_expired:
                     logger.info(f'Commit is_member_info_expired，重新开始Set')
                     step = 0
                     continue
-
 
                 if len(ok_resps) < quorum:
                     commit_no_quorum_ok_count += 1
@@ -301,10 +309,9 @@ class KVClient:
         return value
 
     def _GetInternal(self, key_type: KVService_pb2.Key.Type, key_content: str, timeout: int = 60) -> Union[int, str]:
-        read_addrs = set(
-            [member.addr for member in self.__members_info.members])
-        read_addrs = read_addrs | set(
-            [member.addr for member in self.__members_info.deletingMembers])
+        read_addrs = {member.addr for member in self.__members_info.members} | \
+                    {member.addr for member in self.__members_info.deletingMembers}
+
         quorum = int(len(read_addrs) / 2 + 1)
 
         # 构造request
@@ -319,17 +326,18 @@ class KVClient:
             channel) for channel in channels]
         stubmethod_with_requests = [(stub.GetValue, request) for stub in stubs]
 
-        is_member_info_expired = 0
+        is_member_info_expired = False
         err_count = multiprocessing.Value('i', 0)
         errs = []
         values = []
 
         def resp_callback(resp):
+            nonlocal is_member_info_expired
             if resp.firstKVServiceResp and resp.firstKVServiceResp.membersInfo.version > self.__members_info.version:
                 # 如果返回的成员信息版本号大于当前版本号，则更新当前的成员信息
                 self.__members_info.CopyFrom(
                     resp.firstKVServiceResp.membersInfo)
-                is_member_info_expired += 1
+                is_member_info_expired = True
                 return
             if resp.err and resp.err != KVService_pb2.GetValueResp.Err.OK:
                 with err_count.get_lock():
@@ -345,12 +353,12 @@ class KVClient:
         while True:
             retry_count += 1
             err_count.value = 0
-            is_member_info_expired = 0
+            is_member_info_expired = False
             errs = []
             values.clear()
             collect_quorum_responses_sync(
                 stubmethod_with_requests, quorum, resp_callback, timeout)
-            if is_member_info_expired != 0:
+            if is_member_info_expired:
                 continue
             if retry_count < 5 and len(values) + err_count.value < quorum:
                 continue
@@ -365,64 +373,279 @@ class KVClient:
             raise Exception(
                 f'Only {len(values) + err_count.value} services responded, which is less than the quorum required. Execution failed!')
 
+    # 如果check_func返回True说明不需要继续执行了，直接返回失败
+    def _copy_datas(self, key_type: KVService_pb2.Key.Type, source_addrs, target_addrs, quorum: int, check_func=lambda: False) -> bool:
+        class DataIter:
+            _column = KVService_pb2.Key.Type.Meta
+            _cache_datas = deque()
+            _last_key = ""
+            _addr = str()
+
+            def __init__(self, addr: str, column: KVService_pb2.Key.Type):
+                self._addr = addr
+                self._column = column
+                self._last_key = ""
+                self._cache_datas = deque()
+                channel = grpc.aio.insecure_channel(addr)
+                self._stub = KVService_pb2_grpc.KVServiceStub(channel)
+
+            def _pull_datas(self):
+                request = KVService_pb2.GetItemsReq(prev_last_key=KVService_pb2.Key(
+                    type=self._column, content=self._last_key), expect_count=100)
+                loop = asyncio.get_event_loop()
+                try:
+                    response = loop.run_until_complete(asyncio.wait_for(self._stub.GetItems(request), timeout=3))
+                except futures.TimeoutError as e:
+                    logger.info(f"Timeout error occurred")
+                    raise e
+                self._cache_datas.extend(response.kvs)
+
+            def awake(self, last_key: str = "") -> bool:
+                self._last_key = last_key
+                try:
+                    self._pull_datas()
+                except Exception as e:
+                    return False
+                return True
+
+            # 如果抛出异常说明已经到end了
+            def get(self):
+                item = self._cache_datas[0]
+                self._last_key = item.key.content
+                return item.key.content, item.value.commitedVersion, item.value.value
+
+            # 如果抛出异常说明拉取时出错了
+            def next(self):
+                item = self._cache_datas.popleft()
+                if len(self._cache_datas) == 0:
+                    self._pull_datas()
+                return item.key.content, item.value.commitedVersion, item.value.value
+
+            def __lt__(self, other):
+                item_a, item_b = None, None
+                a_err = b_err = False
+
+                try:
+                    item_a = self.get()
+                except:
+                    a_err = True
+
+                try:
+                    item_b = other.get()
+                except:
+                    b_err = True
+
+                if a_err and b_err:
+                    return False
+                if a_err and not b_err:
+                    return False
+                if not a_err and b_err:
+                    return True
+                # Compare the two items based on their content and version value
+                return (item_a[0], -item_a[1]) < (item_b[0], -item_b[1])
+        
+        iters = [DataIter(addr, key_type) for addr in source_addrs]
+        usable_iters = PriorityQueue()
+        usable_iters_len = 0  # PriorityQueue居然不维护长度...
+        offline_iters = deque() # 网络请求出错的iter、如果pq内iter总数低于quorum要从里面唤醒
+        for iter in iters:
+            if iter.awake():
+                usable_iters.put(iter)
+                usable_iters_len += 1
+            else:
+                offline_iters.append(iter)
+
+        last_cur_key = ""  # awake offline key用
+        cur_key = ""
+        cur_max_version = -1
+        cur_value = ""
+        
+        while True:
+            # 先检查usable_iters是否够quorum个
+            retry_times1 = 2
+            while usable_iters_len < quorum and retry_times1 > 0:
+                # 要召回offline的iter
+                iter = offline_iters.popleft()
+                retry_times2 = 3
+                while retry_times2 > 0:
+                    if iter.awake(last_cur_key):
+                        usable_iters.put(iter)
+                        usable_iters_len += 1
+                        break
+                    else:
+                        retry_times2 -= 1
+                if retry_times2 == 0:
+                    # 唤醒失败，塞回offline_iters尾部，下一个循环从头部拿新的
+                    offline_iters.append(iter)
+                    retry_times1 -= 1
+            assert retry_times1 > 0
+
+            iter = usable_iters.get(block=False)
+            logger.info(f'iter from {iter._addr}')
+            try:
+                key, version, value = iter.get()
+            except:
+                # 所有iter都迭代完了
+                break
+            logger.info(f'got key: {key}, version: {version}, value: {value}')
+            if key != cur_key:
+                # 新一轮key
+                # 提交key到addingMember
+                if cur_key != '':
+                    firstReq = KVService_pb2.FirstKVServiceReq(
+                        membersInfoVersion=self.__members_info.version)
+                    key_with_column = KVService_pb2.Key(
+                        content=cur_key, type=key_type)
+                    request = KVService_pb2.CommitReq(
+                        firstReq=firstReq, key=key_with_column, version=cur_max_version, value=cur_value)
+
+                    channels = [grpc.aio.insecure_channel(
+                        addr) for addr in target_addrs]
+                    stubs = [KVService_pb2_grpc.KVServiceStub(
+                        channel) for channel in channels]
+                    stubmethod_with_requests = [
+                        (stub.CommitKey, request) for stub in stubs]
+                    if check_func():
+                        return False
+                    def resp_ok(resp):
+                        assert not resp.firstKVServiceResp or resp.firstKVServiceResp.membersInfo.version <= self.__members_info.version
+                        return True
+                    ok_resps = collect_all_ok_responses_sync(
+                        stubmethod_with_requests, resp_ok, 5)
+                    assert len(ok_resps) == len(target_addrs)
+                    logger.info(f'commit {cur_key}->{cur_value}')
+                # 轮到新的key
+                last_cur_key = cur_key
+                cur_key = key
+                cur_max_version = version
+                cur_value = value
+            else:
+                if version > cur_max_version:
+                    cur_max_version = version
+                    cur_value = value
+            try:
+                iter.next()
+            except:
+                offline_iters.append(iter)
+                usable_iters_len -= 1
+            else:
+                usable_iters.put(iter)
+
+        return True
+    
     # 注意在AddMember前应该先在新member上启动相应的service，上面的MembersInfo随意，其version不要比当前的大就行
     def AddMember(self, adding_member_addrs: List[str]) -> bool:
-        lock_lease = 30 # 单位：分钟
-        if not self._try_lock("MEMBER.members_info", lock_lease):
+        lock_lease = 2  # 单位：分钟
+        if not self._try_lock("MEMBER.members_info1", lock_lease):
             # 没拿到锁
             return False
         # NOTICE 时刻检查锁是否过期了，起码应该在耗时操作后和写入操作前检查
         cur_time = time.time()
+
         def is_lock_expired() -> bool:
             return time.time() - cur_time >= lock_lease * 60 - 10   # 保守一点，10秒内还没过期也不要继续了
-        
-        _, members_info_str = self._GetInternal(KVService_pb2.Key.Type.Meta, "MEMBER.member_info", 10)
+
+        _, members_info_json_str = self._GetInternal(
+            KVService_pb2.Key.Type.Meta, "MEMBER.member_info", 10)
         if is_lock_expired():
             return False
         new_members_infos = KVService_pb2.MembersInfo()
-        new_members_infos.ParseFromString(members_info_str)
-        self.__members_info = new_members_infos  # 顺带更新一下自己的members_info
+        Parse(members_info_json_str, new_members_infos)
+        max_member_id = max([m.id for m in list(new_members_infos.members) +
+                            list(new_members_infos.addingMembers) + list(new_members_infos.deletingMembers)], default=0)
+
+        # 把原来的预备成员都清除，现在同一时间只能有一个client进行成员变更，后续可以再考虑允许多个client同时做成员变更
+        # 现在全程要持有成员锁，导致数据数量过大的时候容易在复制阶段因为耗时过大而丢锁，不是特别好的设计
+        del new_members_infos.addingMembers[:]
+        del new_members_infos.deletingMembers[:]
+
+        adding_members = []
 
         # 为new_members_infos AddMember
-        max_member_id = max([m.id for m in new_members_infos.members + new_members_infos.addingMembers + new_members_infos.deletingMembers], default=0)
         for addr in adding_member_addrs:
             max_member_id += 1
-            new_members_infos.addingMembers.append(KVService_pb2.Member(addr=addr, id=max_member_id))
+            adding_members.append(KVService_pb2.Member(addr=addr, id=max_member_id))
+        new_members_infos,adding_members.extend(adding_members)
         new_members_infos.version += 1
+        self.__members_info = new_members_infos  # 顺带更新一下自己的members_info
 
         # step 1 将新成员写入到全局AddingMember里
-        while not self._SetInternal(KVService_pb2.Key.Type.Meta, "MEMBER.member_info", new_members_infos.SerializeToString(), 5):
+        while not self._SetInternal(KVService_pb2.Key.Type.Meta, "MEMBER.member_info", MessageToJson(new_members_infos), 5):
             # 因为有锁的存在，理论上只会因为修复而失败，理论上应该最多只会重试一次就能成功
             if is_lock_expired():
                 return False
             pass
         if is_lock_expired():
             return False
-        
-        # step 2 将旧数据复制到新成员里，通过迭代器的方式
-        
 
+        # step 2 将旧数据复制到新成员里
+        read_addrs = {member.addr for member in self.__members_info.members} | \
+            {member.addr for member in self.__members_info.deletingMembers}
+        old_quorum = int(len(read_addrs) / 2 + 1)
+        # 先Meta再User
+        ok = self._copy_datas(KVService_pb2.Key.Type.User, read_addrs, adding_member_addrs, old_quorum, is_lock_expired)
+        if not ok:
+            return False
+        ok = self._copy_datas(KVService_pb2.Key.Type.Meta, read_addrs, adding_member_addrs, old_quorum, is_lock_expired)
+        if not ok:
+            return False
         
+        # step 3 将新成员写入到全局Member里
+        new_members_infos.version += 1
         
+        new_member_infos_adding_members = [member for member in new_members_infos.addingMembers if member not in adding_members]
+        del new_members_infos.addingMembers[:]
+        new_members_infos.addingMembers.extend(new_member_infos_adding_members)
+        new_members_infos.members.extend(adding_members)
+        self.__members_info = new_members_infos  # 顺带更新一下自己的members_info
+        while not self._SetInternal(KVService_pb2.Key.Type.Meta, "MEMBER.member_info", MessageToJson(new_members_infos), 5):
+            # 因为有锁的存在，理论上只会因为修复而失败，理论上应该最多只会重试一次就能成功
+            if is_lock_expired():
+                return False
+            pass
+        if is_lock_expired():
+            return False
 
-        pass
+        return True
 
     def DeleteMember(self, deleting_member_ids: List[int]) -> bool:
         pass
 
 
+#if __name__ == '__main__':
+#    parser = argparse.ArgumentParser()
+#    parser.add_argument('--key', required=True, help='the key to set')
+#    parser.add_argument('--value', required=True, help='the value to set')
+#    parser.add_argument('--log_name', required=False, help='the value to set')
+#
+#    args = parser.parse_args()
+#
+#    if args.log_name:
+#        log_manager = LogManager(__name__, f'{args.log_name}.log')
+#    else:
+#        log_manager = LogManager(__name__)
+#    logger = log_manager.get_logger()
+#
+#    members = ['127.0.0.1:8001', '127.0.0.1:8002', '127.0.0.1:8003']
+#    members = [(m, i+1) for i, m in enumerate(members)]
+#    members_info = KVService_pb2.MembersInfo()
+#    for addr, id in members:
+#        members_info.members.append(KVService_pb2.Member(addr=addr, id=id))
+#    members_info.version = 3
+#
+#    kv_client = KVClient(members_info)
+#
+#    key = args.key
+#    value = args.value
+#    kv_client.Set(key, value, timeout=1)
+#
+#    # 测试 Get 方法
+#    value = kv_client.Get(key, timeout=1)
+#    print(f'value: "{value}"')
+
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--key', required=True, help='the key to set')
-    parser.add_argument('--value', required=True, help='the value to set')
-    parser.add_argument('--log_name', required=False, help='the value to set')
-
-    args = parser.parse_args()
-
-    if args.log_name:
-        log_manager = LogManager(__name__, f'{args.log_name}.log')
-    else:
-        log_manager = LogManager(__name__)
+    log_manager = LogManager(__name__)
     logger = log_manager.get_logger()
 
     members = ['127.0.0.1:8001', '127.0.0.1:8002', '127.0.0.1:8003']
@@ -434,10 +657,4 @@ if __name__ == '__main__':
 
     kv_client = KVClient(members_info)
 
-    key = args.key
-    value = args.value
-    kv_client.Set(key, value, timeout=1)
-
-    # 测试 Get 方法
-    value = kv_client.Get(key, timeout=1)
-    print(f'value: "{value}"')
+    kv_client.AddMember(["127.0.0.1:8004", "127.0.0.1:8005"])

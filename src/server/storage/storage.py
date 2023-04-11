@@ -73,19 +73,21 @@ class Storage:
             return self.iterator.__next__().decode('utf-8')
 
     class ItemIterator:
-        def __init__(self, storage, column_handle, start_key=None):
+        def __init__(self, storage, column_handle, start_key:str=None):
             self.storage = storage
             if start_key:
-                self.iterator = self.storage.db_.iteritems(column_handle, start_key.encode('utf-8'))
+                self.iterator = self.storage.db_.iteritems(column_handle)
+                self.iterator.seek(start_key.encode('utf-8'))
             else:
                 self.iterator = self.storage.db_.iteritems(column_handle)
+                self.iterator.seek_to_first()
 
         def __iter__(self):
             return self
 
         def __next__(self):
             key, value = self.iterator.__next__()
-            return key.decode('utf-8'), value
+            return key[1].decode('utf-8'), value
 
 
     def NewKeyIterator(self, column: DBColumn, key: str = None) -> KeyIterator:

@@ -17,7 +17,6 @@ service KVService {
     rpc GetItems (GetItemsReq) returns (GetItemsResp) {}
 }
 
-// 需要一种表达，先过滤member_info version再谈
 message Member {
     string addr = 1;
     uint64 id = 2;
@@ -34,7 +33,7 @@ message CommitedValue {
     uint64 commitedVersion = 2;
 }
 
-// 还没有commit下来的
+// 还没有commit下来的就是log
 message LogValue {
     string value = 1;
     uint64 value_bal = 2;
@@ -182,9 +181,8 @@ message GetValueResp {
 
 message GetItemsReq {
     // 没必要校验member版本，本来就是成员变更才使用的
-    optional Key prev_last_key = 1;  // 也就是说返回将从这个key的下一个开始，不填就是从头开始
+    Key prev_last_key = 1;  // 也就是说返回将从这个key的下一个开始，空字符就是从头开始
     uint64 expect_count = 2;  // 拉取的数量
-    string addr = 3;
 }
 
 message KV {
@@ -199,51 +197,4 @@ message GetItemsResp {
     }
     Err err = 1;
     repeated KV kvs = 2;
-    string addr = 3;
-}
-
-message CreateIterReq {
-    // 没必要校验member版本，本来就是成员变更才使用的
-    optional Key start_key = 1;
-    uint64 lease = 2;  // 单位是分钟
-    string addr = 3;
-}
-
-message CreateIterResp {
-    uint64 iter_id = 1;
-    string addr = 2;
-}
-
-message KeepIterReq {
-    uint64 iter_id = 1;
-    uint64 lease = 2;  // 单位是分钟
-    string addr = 3;
-}
-
-message KeepIterResp {
-    enum Err {
-        OK = 0;
-        NotFound = 1;  // 可能是不存在，也可能是已经过期了
-    }
-    Err err = 1;
-    string addr = 2;
-}
-
-message NextItemReq {
-    uint64 iter_id = 1;
-    string cur_key = 2;
-    uint64 expect_count = 3;  // 拉取的数量
-    string addr = 4;
-}
-
-
-message NextItemResp {
-    enum Err {
-        OK = 0;
-        IterNotFound = 1;  // 可能是不存在，也可能是已经过期了
-        IterHitEnd = 2;  // 无法再迭代了
-    }
-    Err err = 1;
-    repeated KV kvs = 2;
-    string addr = 3;
 }
