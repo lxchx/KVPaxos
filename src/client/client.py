@@ -106,7 +106,7 @@ class KVClient:
                     [member.addr for member in self.__members_info.members])
                 set_addrs = set_addrs | set(
                     [member.addr for member in self.__members_info.addingMembers])
-                quorum = majority(set_addrs)
+                quorum = majority(len(set_addrs))
                 # 构造request
                 firstReq = KVService_pb2.FirstKVServiceReq(
                     membersInfoVersion=self.__members_info.version)
@@ -316,7 +316,7 @@ class KVClient:
         read_addrs = {member.addr for member in self.__members_info.members} | \
                     {member.addr for member in self.__members_info.deletingMembers}
 
-        quorum = majority(read_addrs)
+        quorum = majority(len(read_addrs))
 
         # 构造request
         firstReq = KVService_pb2.FirstKVServiceReq(
