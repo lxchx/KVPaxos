@@ -39,8 +39,8 @@ class KVClient:
         return code
 
     # 主动式的锁，需要主动查询，利用KV存储本身实现，带租期（单位是分钟）返回值代表上锁有没有成功
-    def _try_lock(self, lock_object: str, lease_period: int = 30) -> bool:
-        lock_key = f'LOCK.{lock_object}'
+    def _try_lock(self, lock_object: str, lease_period: int = 30, lock_prifix: str = 'PRIVATE_LOCK') -> bool:
+        lock_key = f'{lock_prifix}.{lock_object}'
         _, lock_value_json_str = self._GetInternal(
             KVService_pb2.Key.Type.Meta, lock_key, 5)
         if lock_value_json_str:
@@ -55,6 +55,10 @@ class KVClient:
         ), expiration_timestamp=int(time.time()) + lease_period * 60)
         # 如果这里返回False说明锁被另一个Client抢到了
         return self._SetInternal(KVService_pb2.Key.Type.Meta, lock_key, MessageToJson(lock_value), 5)
+    
+    # TODO 不成功时应该返回锁的剩余期限
+    def TryLock(self, obj: str, lease_period: int = 30) -> bool:
+        return self._try_lock(obj, lease_period, 'USER_LOCK')
 
     def Set(self, key: str, value: str, timeout: int = 60):
         random.seed(time.time())
