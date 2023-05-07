@@ -28,7 +28,7 @@ def majority(total: int) -> int:
 class KVClient:
     __members_info = KVService_pb2.MembersInfo()
 
-    def __init__(self, members_info: KVService_pb2.MembersInfo, ):
+    def __init__(self, members_info: KVService_pb2.MembersInfo):
         self.__members_info.CopyFrom(members_info)
 
     def __client_feature_code():
@@ -384,7 +384,7 @@ class KVClient:
     # 如果check_func返回True说明不需要继续执行了，直接返回失败
     def _copy_datas(self, key_type: KVService_pb2.Key.Type, source_addrs, target_addrs, source_expect_count: int, target_expect_count: int, check_func=lambda: False) -> bool:
         assert len(source_addrs) >= source_expect_count
-        assert len(target_expect_count) >= target_expect_count
+        assert len(target_addrs) >= target_expect_count
         class DataIter:
             _column = KVService_pb2.Key.Type.Meta
             _cache_datas = deque()
@@ -581,7 +581,7 @@ class KVClient:
         for addr in adding_member_addrs:
             max_member_id += 1
             adding_members.append(KVService_pb2.Member(addr=addr, id=max_member_id))
-        new_members_infos.adding_members.extend(adding_members)
+        new_members_infos.addingMembers.extend(adding_members)
         new_members_infos.version += 1
         self.__members_info = new_members_infos  # 顺带更新一下自己的members_info
 
